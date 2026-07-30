@@ -351,44 +351,62 @@ def draw_region_overlay(
         return base
 
     alpha = float(np.clip(alpha, 0.0, 1.0))
-    overlay = base.astype(np.float32)
-    color_f = color_img.astype(np.float32)
-    overlay[region_mask] = (1.0 - alpha) * overlay[region_mask] + alpha * color_f[region_mask]
-    overlay = overlay.astype(np.uint8)
+    # Blend only painted pixels (same formula as full-frame float32 path).
+    overlay = base.copy()
+    bm = base[region_mask].astype(np.float32)
+    cm = color_img[region_mask].astype(np.float32)
+    overlay[region_mask] = ((1.0 - alpha) * bm + alpha * cm).astype(np.uint8)
 
     # Contour tracing is O(regions); skip when disabled or too many pieces.
     if draw_contours and n_colors <= 120:
         for color_key in color_keys:
-            if paint_keys is not None:
-                src = (paint_keys == int(color_key)).astype(np.uint8) * 255
-            else:
-                src = np.zeros((h, w), dtype=np.uint8)
-                for cc_label, ck in paint_pairs:
-                    if ck == color_key:
-                        src[labels == cc_label] = 255
-            if not np.any(src):
-                continue
-            # Prefer block bbox ROI so edit refresh stays fast on large pages.
             bb = bbox_by_key.get(int(color_key))
-            if bb is not None:
+            if paint_keys is not None and bb is not None:
                 bx, by, bw, bh = bb
                 pad = max(4, contour_thickness + 2)
                 x0 = max(0, int(bx) - pad)
                 y0 = max(0, int(by) - pad)
                 x1 = min(w, int(bx) + int(bw) + pad)
                 y1 = min(h, int(by) + int(bh) + pad)
-                roi = src[y0:y1, x0:x1]
+                src = (
+                    paint_keys[y0:y1, x0:x1] == int(color_key)
+                ).astype(np.uint8) * 255
+                if not np.any(src):
+                    continue
                 contours, _ = cv2.findContours(
-                    roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    src, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                 )
-                # Shift contours back to full-image coords.
                 contours = [
                     c + np.array([[[x0, y0]]], dtype=c.dtype) for c in contours
                 ]
             else:
-                contours, _ = cv2.findContours(
-                    src, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                )
+                if paint_keys is not None:
+                    src = (paint_keys == int(color_key)).astype(np.uint8) * 255
+                else:
+                    src = np.zeros((h, w), dtype=np.uint8)
+                    for cc_label, ck in paint_pairs:
+                        if ck == color_key:
+                            src[labels == cc_label] = 255
+                if not np.any(src):
+                    continue
+                if bb is not None:
+                    bx, by, bw, bh = bb
+                    pad = max(4, contour_thickness + 2)
+                    x0 = max(0, int(bx) - pad)
+                    y0 = max(0, int(by) - pad)
+                    x1 = min(w, int(bx) + int(bw) + pad)
+                    y1 = min(h, int(by) + int(bh) + pad)
+                    roi = src[y0:y1, x0:x1]
+                    contours, _ = cv2.findContours(
+                        roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
+                    contours = [
+                        c + np.array([[[x0, y0]]], dtype=c.dtype) for c in contours
+                    ]
+                else:
+                    contours, _ = cv2.findContours(
+                        src, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
             if not contours:
                 continue
             color = tuple(int(c) for c in key_to_color[color_key])
