@@ -1,5 +1,7 @@
 # 工程图纸信息块分割（Info-Block Segmentation）
 
+![Web 审图效果](sample/output/web_effect.jpg)
+
 面向机械 / 铸造等 **工程图纸** 的轻量信息区域分割方案：无需预先框选矩形，即可把视图、标题栏、尺寸注记、比例文字等「信息块」自动切开，并支持 **Web 人工审核** 与导出。
 
 适合 CAD 审图、图纸结构化预处理、区域裁剪入库等场景。
@@ -91,9 +93,7 @@ PDF/图片导入
 
 审核满意后可导出各信息块 ZIP。例如某一视图裁剪件：
 
-![导出组件示例 part_008](sample/output/A645AB62K1-Machining_p1_parts/part_008.png)
-
-同目录下还有 `part_000` … `part_018` 等全部组件裁剪，见 [`sample/output/A645AB62K1-Machining_p1_parts/`](sample/output/A645AB62K1-Machining_p1_parts/)。
+![导出组件示例 part_008](sample/output/part_008_example.png)
 
 ### 9. 导出整页叠色效果图
 
