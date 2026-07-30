@@ -101,7 +101,6 @@ PDF/图片导入
 
 ![导出叠色效果图](sample/output/A645AB62K1-Machining_p1_overlay.png)
 
-**怎么自己复现：** 启动 Web（见下方「快速开始」）→ 导入 `sample/A645AB62K1-Machining.pdf` → 点重新分析 → 在过程图里对照上述步骤 → 需要时手动审核 → 导出效果图 / 组件 ZIP。
 
 ---
 
