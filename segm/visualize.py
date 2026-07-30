@@ -7,7 +7,6 @@ semi-transparent multi-color region masks overlaid on the original drawing
 
 from __future__ import annotations
 
-import os
 from typing import List, Optional, Sequence, Tuple
 
 import cv2
@@ -20,21 +19,6 @@ def _ensure_bgr(img: np.ndarray) -> np.ndarray:
     if img.ndim == 2:
         return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     return img.copy()
-
-
-def make_region_palette(n: int, seed: int = 42) -> np.ndarray:
-    """Distinct BGR colors for n regions (HSV spaced, similar to demo UI)."""
-    n = max(int(n), 1)
-    palette = np.zeros((n, 3), dtype=np.uint8)
-    rng = np.random.default_rng(seed)
-    # Shuffle hue order a bit so adjacent labels are less likely similar
-    hues = np.linspace(0, 179, n, endpoint=False)
-    rng.shuffle(hues)
-    for i, hue in enumerate(hues):
-        hsv = np.uint8([[[int(hue), 200, 255]]])
-        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
-        palette[i] = bgr
-    return palette
 
 
 def color_for_label(label_id: int, seed: int = 42) -> np.ndarray:
@@ -205,96 +189,6 @@ def assign_contrast_colors(
                 best = cand
         assigned[key] = best
     return assigned
-
-
-def effective_kernel_size(gap_thres: int) -> int:
-    """Return the actual centered kernel size used by extraction."""
-    k = max(1, int(gap_thres))
-    return k if k % 2 == 1 else k + 1
-
-
-def draw_kernel_legend(
-    img: np.ndarray,
-    gap_thres: int,
-    shape: str = "rect",
-) -> np.ndarray:
-    """Draw a readable kernel-size legend on the output image."""
-    canvas = _ensure_bgr(img)
-    h, w = canvas.shape[:2]
-    k = effective_kernel_size(gap_thres)
-    scale = max(0.6, min(h, w) / 1800.0)
-    font_scale = 0.65 * scale
-    thickness = max(1, int(round(2 * scale)))
-    text = f"DILATE KERNEL: {k}x{k} px  |  GAP: {gap_thres} px  |  {shape.upper()}"
-    (tw, th), baseline = cv2.getTextSize(
-        text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
-    )
-    pad = max(8, int(round(10 * scale)))
-    x0, y0 = pad, pad
-    x1 = min(w - 1, x0 + tw + 2 * pad)
-    y1 = min(h - 1, y0 + th + baseline + 2 * pad)
-    layer = canvas.copy()
-    cv2.rectangle(layer, (x0, y0), (x1, y1), (255, 255, 255), -1)
-    cv2.addWeighted(layer, 0.82, canvas, 0.18, 0, canvas)
-    cv2.rectangle(canvas, (x0, y0), (x1, y1), (25, 25, 25), thickness)
-    cv2.putText(
-        canvas,
-        text,
-        (x0 + pad, y0 + pad + th),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        (20, 20, 20),
-        thickness,
-        cv2.LINE_AA,
-    )
-    return canvas
-
-
-def render_kernel_preview(gap_thres: int, shape: str = "rect") -> np.ndarray:
-    """Render the exact morphology kernel as a visible grid image."""
-    k = effective_kernel_size(gap_thres)
-    morph = {
-        "ellipse": cv2.MORPH_ELLIPSE,
-        "cross": cv2.MORPH_CROSS,
-    }.get(shape.lower(), cv2.MORPH_RECT)
-    kernel = cv2.getStructuringElement(morph, (k, k))
-    cell = max(8, min(32, 480 // max(k, 1)))
-    grid = np.full((k * cell, k * cell, 3), 245, dtype=np.uint8)
-    for row in range(k):
-        for col in range(k):
-            color = (50, 180, 255) if kernel[row, col] else (255, 255, 255)
-            p0 = (col * cell, row * cell)
-            p1 = ((col + 1) * cell - 1, (row + 1) * cell - 1)
-            cv2.rectangle(grid, p0, p1, color, -1)
-            cv2.rectangle(grid, p0, p1, (80, 80, 80), 1)
-    return grid
-
-
-def draw_blocks(
-    img: np.ndarray,
-    blocks: Sequence[InfoBlock],
-    color: tuple = (0, 180, 0),
-    thickness: int = 2,
-    draw_ids: bool = True,
-) -> np.ndarray:
-    """Draw block rectangles on a copy of img (debug aid)."""
-    canvas = _ensure_bgr(img)
-    for block in blocks:
-        p1 = (block.x, block.y)
-        p2 = (block.x + block.w, block.y + block.h)
-        cv2.rectangle(canvas, p1, p2, color, thickness)
-        if draw_ids:
-            cv2.putText(
-                canvas,
-                str(block.id),
-                (block.x, max(0, block.y - 3)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                color,
-                1,
-                cv2.LINE_AA,
-            )
-    return canvas
 
 
 def colorize_label_map(label_map: np.ndarray, seed: int = 0) -> np.ndarray:
@@ -541,82 +435,3 @@ def draw_region_overlay_from_debug(
         fill_mode=fill_mode,
         **kwargs,
     )
-
-
-def save_debug_bundle(
-    output_dir: str,
-    img: np.ndarray,
-    blocks: List[InfoBlock],
-    debug: dict,
-    prefix: str = "info_blocks",
-    alpha: float = 0.45,
-    fill_mode: str = "dilated",
-    show_kernel_legend: bool = False,
-) -> dict:
-    """Write intermediate images + boss-style region color overlay.
-
-    Returns a dict of written file paths. Key result:
-    ``08_region_overlay`` / ``region_overlay`` — translucent multi-color masks.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    paths = {}
-
-    def _write(name: str, array: np.ndarray) -> str:
-        path = os.path.join(output_dir, f"{prefix}_{name}.png")
-        cv2.imwrite(path, array)
-        paths[name] = path
-        return path
-
-    _write("00_input", _ensure_bgr(img))
-    _write("01_gray", debug["gray"])
-    _write("02_binary", debug["binary"])
-    _write("03_border_cleared", debug["binary_border_cleared"])
-    _write("04_lines_removed", debug["lines"])
-    _write("05_binary_for_dilate", debug["binary_nolines"])
-    _write("06_dilated", debug["dilated"])
-    _write("07_cc_colors", colorize_label_map(debug["label_map"]))
-    _write("08_blocks", draw_blocks(img, blocks))
-
-    overlay = draw_region_overlay_from_debug(
-        img, blocks, debug, alpha=alpha, fill_mode=fill_mode
-    )
-    cfg = debug.get("config")
-    effective_gap = int(
-        debug.get("effective_gap_thres", cfg.gap_thres if cfg is not None else 1)
-    )
-    if cfg is not None and show_kernel_legend:
-        overlay = draw_kernel_legend(
-            overlay, effective_gap, cfg.dilate_shape
-        )
-    _write("09_region_overlay", overlay)
-    alias = os.path.join(output_dir, "region_overlay.png")
-    cv2.imwrite(alias, overlay)
-    paths["region_overlay"] = alias
-
-    if cfg is not None:
-        _write(
-            "10_dilation_kernel",
-            render_kernel_preview(effective_gap, cfg.dilate_shape),
-        )
-    meta_path = os.path.join(output_dir, f"{prefix}_meta.txt")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        f.write(f"num_blocks={len(blocks)}\n")
-        f.write(f"overlay_alpha={alpha}\n")
-        f.write(f"fill_mode={fill_mode}\n")
-        f.write(f"border_margin_px={debug.get('border_margin', 0)}\n")
-        if cfg is not None:
-            k = effective_kernel_size(effective_gap)
-            f.write(f"requested_gap={cfg.gap_thres}\n")
-            f.write(f"effective_gap={effective_gap}\n")
-            f.write(f"effective_kernel={k}x{k}\n")
-        if cfg is not None:
-            for key, value in vars(cfg).items():
-                f.write(f"{key}={value}\n")
-        f.write("\nblocks (id,cc_label,group_label,x,y,w,h,area):\n")
-        for b in blocks:
-            f.write(
-                f"{b.id},{b.cc_label},{b.group_label},"
-                f"{b.x},{b.y},{b.w},{b.h},{b.area}\n"
-            )
-    paths["meta"] = meta_path
-    return paths

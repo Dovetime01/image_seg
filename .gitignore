@@ -12,3 +12,6 @@ venv/
 
 # Sample / batch data (local only)
 graph/
+
+# CLI debug overlays (legacy)
+info_block_debug/
