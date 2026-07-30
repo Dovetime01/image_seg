@@ -43,8 +43,10 @@ def _labels_touched(
     stroke: np.ndarray,
 ) -> List[int]:
     vals = label_map[stroke > 0]
-    labs = sorted({int(v) for v in vals.tolist() if int(v) > 0})
-    return labs
+    vals = vals[vals > 0]
+    if vals.size == 0:
+        return []
+    return [int(v) for v in np.unique(vals)]
 
 
 def _target_roi(
@@ -55,11 +57,10 @@ def _target_roi(
 ) -> Tuple[int, int, int, int]:
     """BBox of target region ∪ stroke, padded and clipped to the image."""
     h, w = shape
-    ys, xs = np.where(region_bool)
-    if len(xs) == 0:
+    x, y, bw, bh = cv2.boundingRect(region_bool.astype(np.uint8))
+    if bw <= 0 or bh <= 0:
         return 0, 0, w, h
-    x0, x1 = int(xs.min()), int(xs.max()) + 1
-    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, y0, x1, y1 = int(x), int(y), int(x + bw), int(y + bh)
     if points:
         pxs = [float(p[0]) for p in points]
         pys = [float(p[1]) for p in points]
@@ -80,18 +81,40 @@ def _absorb_tiny_fragments(
     keep_labels: Sequence[int],
 ) -> np.ndarray:
     """Merge leftover scraps of the edited region into the nearest kept label."""
-    out = label_map.copy()
+    # Caller already owns a writable copy; avoid a second full-image clone.
+    out = label_map
     keep = [int(x) for x in keep_labels]
     if len(keep) < 1:
         return out
 
-    leftover = region_mask & ~np.isin(out, keep)
+    rx, ry, rbw, rbh = cv2.boundingRect(region_mask.astype(np.uint8))
+    if rbw <= 0 or rbh <= 0:
+        return out
+    # Pad so fragment dilate can see keep labels just outside the region bbox.
+    pad = 5
+    h, w = out.shape[:2]
+    x0 = max(0, int(rx) - pad)
+    y0 = max(0, int(ry) - pad)
+    x1 = min(w, int(rx + rbw) + pad)
+    y1 = min(h, int(ry + rbh) + pad)
+
+    roi_out = out[y0:y1, x0:x1]
+    roi_region = region_mask[y0:y1, x0:x1]
+    leftover = roi_region & ~np.isin(roi_out, keep)
     if not np.any(leftover):
         return out
 
-    n, cc, _, _ = cv2.connectedComponentsWithStats(
+    n, cc, stats, cents = cv2.connectedComponentsWithStats(
         leftover.astype(np.uint8) * 255, connectivity=8
     )
+    keep_cents: dict = {}
+    for lab in keep:
+        m = roi_out == lab
+        if not np.any(m):
+            continue
+        ys, xs = np.where(m)
+        keep_cents[lab] = (float(ys.mean()), float(xs.mean()))
+
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     for i in range(1, n):
         frag = cc == i
@@ -100,23 +123,20 @@ def _absorb_tiny_fragments(
         best_lab = keep[0]
         best_hit = -1
         for lab in keep:
-            hit = int(((out == lab) & ring).sum())
+            hit = int(((roi_out == lab) & ring).sum())
             if hit > best_hit:
                 best_hit = hit
                 best_lab = lab
         if best_hit <= 0:
-            ys, xs = np.where(frag)
-            cy, cx = float(ys.mean()), float(xs.mean())
+            cy = float(cents[i][1])
+            cx = float(cents[i][0])
             best_d = 1e18
-            for lab in keep:
-                ly, lx = np.where(out == lab)
-                if len(lx) == 0:
-                    continue
-                d = (float(ly.mean()) - cy) ** 2 + (float(lx.mean()) - cx) ** 2
+            for lab, (ly, lx) in keep_cents.items():
+                d = (ly - cy) ** 2 + (lx - cx) ** 2
                 if d < best_d:
                     best_d = d
                     best_lab = lab
-        out[frag] = best_lab
+        roi_out[frag] = best_lab
     return out
 
 
@@ -128,22 +148,21 @@ def _rebuild_block_from_mask(
     group_label: int = 0,
 ) -> Optional[InfoBlock]:
     """Build an InfoBlock from ink under a label."""
-    region = label_map == int(label_id)
-    if not np.any(region):
+    region_u8 = (label_map == int(label_id)).astype(np.uint8)
+    x0, y0, bw, bh = cv2.boundingRect(region_u8)
+    if bw <= 0 or bh <= 0:
         return None
-    ys, xs = np.where(region)
-    x0, x1 = int(xs.min()), int(xs.max()) + 1
-    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x1, y1 = x0 + bw, y0 + bh
     ink = binary[y0:y1, x0:x1] > 0
-    area = int(ink.sum()) if ink.size else int(region.sum())
+    area = int(ink.sum()) if ink.size else int(region_u8.sum())
     if area <= 0:
-        area = int(region.sum())
+        area = int(region_u8.sum())
     return InfoBlock(
         id=block_id,
         x=x0,
         y=y0,
-        w=x1 - x0,
-        h=y1 - y0,
+        w=bw,
+        h=bh,
         area=area,
         cc_label=int(label_id),
         group_label=int(group_label or label_id),
@@ -196,6 +215,8 @@ def _partition_by_stroke_sides(
     points: Sequence[Point],
     binary_roi: np.ndarray,
     region_roi: np.ndarray,
+    stats: Optional[np.ndarray] = None,
+    centroids: Optional[np.ndarray] = None,
 ) -> Tuple[List[int], List[int], List[int], str]:
     """Group all CCs onto two sides of the stroke; return (side_a, side_b, ink, fail)."""
     if len(fg_ids) < 2:
@@ -203,34 +224,54 @@ def _partition_by_stroke_sides(
 
     side_pos: List[int] = []
     side_neg: List[int] = []
-    ink = binary_roi > 0
+    ink = (binary_roi > 0) & region_roi
+    # One-pass ink counts per CC id (avoids repeated np.isin scans).
+    ink_ids = cc[ink]
+    if ink_ids.size:
+        ink_bc = np.bincount(ink_ids.ravel())
+    else:
+        ink_bc = np.zeros(1, dtype=np.int64)
+
     for fid in fg_ids:
-        mask = cc == int(fid)
-        ys, xs = np.where(mask)
-        if len(xs) == 0:
-            continue
-        cy, cx = float(ys.mean()), float(xs.mean())
-        if _stroke_side_sign(cx, cy, points) >= 0:
-            side_pos.append(int(fid))
+        fid = int(fid)
+        if centroids is not None and fid < len(centroids):
+            cx, cy = float(centroids[fid][0]), float(centroids[fid][1])
         else:
-            side_neg.append(int(fid))
+            ys, xs = np.where(cc == fid)
+            if len(xs) == 0:
+                continue
+            cy, cx = float(ys.mean()), float(xs.mean())
+        if _stroke_side_sign(cx, cy, points) >= 0:
+            side_pos.append(fid)
+        else:
+            side_neg.append(fid)
 
     if not side_pos or not side_neg:
-        areas = {fid: int((cc == fid).sum()) for fid in fg_ids}
-        ordered = sorted(fg_ids, key=lambda i: areas[i], reverse=True)
-        side_pos = [ordered[0]]
-        side_neg = list(ordered[1:])
+        if stats is not None:
+            areas_map = {
+                int(fid): int(stats[int(fid), cv2.CC_STAT_AREA]) for fid in fg_ids
+            }
+        else:
+            areas_map = {int(fid): int((cc == fid).sum()) for fid in fg_ids}
+        ordered = sorted(fg_ids, key=lambda i: areas_map[int(i)], reverse=True)
+        side_pos = [int(ordered[0])]
+        side_neg = [int(i) for i in ordered[1:]]
         if not side_neg:
             return [], [], [], "not_disconnected"
 
     def _ink_of(ids: Sequence[int]) -> int:
-        if not ids:
-            return 0
-        return int((np.isin(cc, list(ids)) & ink & region_roi).sum())
+        total = 0
+        for i in ids:
+            ii = int(i)
+            if 0 <= ii < len(ink_bc):
+                total += int(ink_bc[ii])
+        return total
 
     def _area_of(ids: Sequence[int]) -> int:
         if not ids:
             return 0
+        if stats is not None:
+            return int(sum(int(stats[int(i), cv2.CC_STAT_AREA]) for i in ids))
         return int(np.isin(cc, list(ids)).sum())
 
     ink_counts = [_ink_of(side_pos), _ink_of(side_neg)]
@@ -269,7 +310,9 @@ def _peel_minority_near_stroke(
         return None, meta, "no_stroke"
 
     ink_u8 = ink.astype(np.uint8) * 255
-    n_ink, ink_cc = cv2.connectedComponents(ink_u8, connectivity=8)
+    n_ink, ink_cc, ink_stats, ink_cents = cv2.connectedComponentsWithStats(
+        ink_u8, connectivity=8
+    )
     if n_ink <= 2:
         # Single solid ink body: peel by proximity to stroke only.
         dist = cv2.distanceTransform(
@@ -295,22 +338,24 @@ def _peel_minority_near_stroke(
             if int((nxt > 0).sum()) == int((grow > 0).sum()):
                 break
             grow = nxt
-        hit_ids = sorted({int(v) for v in ink_cc[grow > 0].tolist() if int(v) > 0})
+        hit = np.unique(ink_cc[grow > 0])
+        hit_ids = sorted(int(v) for v in hit if int(v) > 0)
         if not hit_ids:
             return None, meta, "no_ink_near_stroke"
 
-        areas = {i: int((ink_cc == i).sum()) for i in range(1, n_ink)}
+        areas = {i: int(ink_stats[i, cv2.CC_STAT_AREA]) for i in range(1, n_ink)}
         soft_cut = 0.35 * total_ink
         selected = {i for i in hit_ids if areas[i] < soft_cut}
         if not selected:
             return None, meta, "hit_main_body"
 
         # Absorb nearby small glyph islands (``M`` ``1`` ``:`` ``2``).
-        cents: dict = {}
-        for i in range(1, n_ink):
-            ys, xs = np.where(ink_cc == i)
-            if len(xs):
-                cents[i] = (float(ys.mean()), float(xs.mean()))
+        # OpenCV centroids are (x, y); store as (cy, cx) for distance math.
+        cents = {
+            i: (float(ink_cents[i][1]), float(ink_cents[i][0]))
+            for i in range(1, n_ink)
+            if areas[i] > 0
+        }
         link = float(max(48, 10 * cut_w))
         sel_areas = [areas[i] for i in selected]
         if sel_areas:
@@ -391,13 +436,14 @@ def split_by_stroke(
 
     cut_w = max(3, int(stroke_width))
     probe = _stroke_mask((h, w), points, max(cut_w, 8))
-    touched = _labels_touched(label_map, probe)
-    if not touched:
+    probe_vals = label_map[probe > 0]
+    probe_vals = probe_vals[probe_vals > 0]
+    if probe_vals.size == 0:
         meta["reason"] = "stroke did not hit any component"
         return label_map, list(blocks), meta
 
-    counts = {lab: int((probe > 0)[label_map == lab].sum()) for lab in touched}
-    target = int(max(counts, key=counts.get))
+    counts_bc = np.bincount(probe_vals.ravel())
+    target = int(np.argmax(counts_bc))
     meta["split_label"] = target
 
     region_bool = label_map == target
@@ -415,11 +461,6 @@ def split_by_stroke(
     local_pts = [(float(px) - x0, float(py) - y0) for px, py in points]
     total_ink = int(((binary_roi > 0) & region_roi).sum())
 
-    peel_mask, peel_meta, peel_fail = _peel_minority_near_stroke(
-        region_roi, binary_roi, local_pts, cut_w
-    )
-    peel_ok = peel_mask is not None and not peel_fail
-
     corridor = _stroke_mask((rh, rw), local_pts, cut_w)
     corridor = cv2.bitwise_and(corridor, (region_roi.astype(np.uint8) * 255))
 
@@ -430,12 +471,18 @@ def split_by_stroke(
             return None, [], [], [], "cut_too_weak"
         work = (region_roi.astype(np.uint8) * 255).copy()
         work[cut_mask > 0] = 0
-        n, cc, stats, _ = cv2.connectedComponentsWithStats(work, connectivity=8)
+        n, cc, stats, cents = cv2.connectedComponentsWithStats(work, connectivity=8)
         fg = [i for i in range(1, n) if int(stats[i, cv2.CC_STAT_AREA]) > 0]
         if len(fg) < 2:
             return None, [], [], [], "not_disconnected"
         side_a, side_b, ink_counts, fail = _partition_by_stroke_sides(
-            cc, fg, local_pts, binary_roi, region_roi
+            cc,
+            fg,
+            local_pts,
+            binary_roi,
+            region_roi,
+            stats=stats,
+            centroids=cents,
         )
         if fail:
             return None, [], [], ink_counts, fail
@@ -450,20 +497,34 @@ def split_by_stroke(
         cc, side_a, side_b, ink_counts, fail = _try_cut(fat)
         mode = "stroke_cut_wide"
 
+    # Lazy peel: only run when hard-cut fails, or when the cut looks balanced
+    # (twin large views) and we may prefer peeling a small annotation instead.
+    balanced = False
+    if (
+        not fail
+        and ink_counts
+        and len(ink_counts) >= 2
+        and total_ink > 0
+    ):
+        a, b = int(ink_counts[0]), int(ink_counts[1])
+        balanced = min(a, b) > 0.18 * total_ink and max(a, b) < 0.82 * total_ink
+
+    peel_mask: Optional[np.ndarray] = None
+    peel_meta: dict = {}
+    peel_fail = ""
+    peel_ok = False
+    if fail or balanced:
+        peel_mask, peel_meta, peel_fail = _peel_minority_near_stroke(
+            region_roi, binary_roi, local_pts, cut_w
+        )
+        peel_ok = peel_mask is not None and not peel_fail
+
     use_peel = False
     if peel_ok and peel_mask is not None:
         if fail:
             use_peel = True
-        elif (
-            ink_counts
-            and len(ink_counts) >= 2
-            and total_ink > 0
-            and peel_meta.get("selected_islands")
-        ):
-            # Prefer peeling a small multi-glyph label over bisecting twin large views.
-            a, b = int(ink_counts[0]), int(ink_counts[1])
-            balanced = min(a, b) > 0.18 * total_ink and max(a, b) < 0.82 * total_ink
-            if balanced and float(peel_meta.get("peel_ink_frac") or 1.0) <= 0.20:
+        elif balanced and peel_meta.get("selected_islands"):
+            if float(peel_meta.get("peel_ink_frac") or 1.0) <= 0.20:
                 use_peel = True
 
     keep_mask: Optional[np.ndarray] = None
@@ -479,16 +540,24 @@ def split_by_stroke(
             int(((small_mask) & (binary_roi > 0)).sum()),
         ]
     elif not fail and cc is not None:
-        area_a = int(np.isin(cc, side_a).sum()) if side_a else 0
-        area_b = int(np.isin(cc, side_b).sum()) if side_b else 0
+        max_cc = int(cc.max()) if cc.size else 0
+        area_bc = np.bincount(cc.ravel(), minlength=max_cc + 1)
+        area_a = int(sum(int(area_bc[i]) for i in side_a)) if side_a else 0
+        area_b = int(sum(int(area_bc[i]) for i in side_b)) if side_b else 0
         if area_a >= area_b:
             keep_ids, small_ids = side_a, side_b
         else:
             keep_ids, small_ids = side_b, side_a
             if len(ink_counts) == 2:
                 ink_counts = [ink_counts[1], ink_counts[0]]
-        keep_mask = np.isin(cc, keep_ids) if keep_ids else np.zeros_like(cc, dtype=bool)
-        small_mask = np.isin(cc, small_ids) if small_ids else np.zeros_like(cc, dtype=bool)
+        lut = np.zeros(max_cc + 1, dtype=np.uint8)
+        if keep_ids:
+            lut[np.asarray(keep_ids, dtype=np.int32)] = 1
+        keep_mask = lut[cc].astype(bool) if keep_ids else np.zeros_like(cc, dtype=bool)
+        lut[:] = 0
+        if small_ids:
+            lut[np.asarray(small_ids, dtype=np.int32)] = 1
+        small_mask = lut[cc].astype(bool) if small_ids else np.zeros_like(cc, dtype=bool)
         meta["snap"]["side_counts"] = [len(keep_ids), len(small_ids)]
     elif peel_ok and peel_mask is not None:
         small_mask = peel_mask
@@ -531,7 +600,11 @@ def split_by_stroke(
     meta["new_labels"] = new_labels
     meta["snap"]["mode"] = mode
     meta["snap"]["ink_counts"] = ink_counts
-    meta["snap"]["areas"] = [int((new_map == lab).sum()) for lab in new_labels]
+    roi_map = new_map[y0:y1, x0:x1]
+    meta["snap"]["areas"] = [
+        int((roi_map == lab_keep).sum()),
+        int((roi_map == lab_small).sum()),
+    ]
     if mode.startswith("stroke_peel"):
         meta["reason"] = f"已剥出笔画处小块并换新色（{mode}）"
     else:

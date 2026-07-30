@@ -27,6 +27,7 @@ from backend.pipeline import (
     encode_jpeg,
     export_parts_zip,
     make_thumbnail,
+    overlay_media_type,
     page_summary,
     pages_from_upload,
     refresh_overlay,
@@ -158,7 +159,10 @@ def get_overlay(job_id: str, page_index: int):
     page = _page(job_id, page_index)
     if page.overlay_png is None:
         raise HTTPException(400, "Page not analyzed yet")
-    return Response(content=page.overlay_png, media_type="image/png")
+    return Response(
+        content=page.overlay_png,
+        media_type=overlay_media_type(page.overlay_png),
+    )
 
 
 @app.get("/api/jobs/{job_id}/pages/{page_index}/debug-steps")

@@ -114,7 +114,8 @@ def default_extract_config(
 
 
 def encode_png(img_bgr: np.ndarray) -> bytes:
-    ok, buf = cv2.imencode(".png", img_bgr)
+    # Compression 1: much faster encode on large pages; file a bit larger.
+    ok, buf = cv2.imencode(".png", img_bgr, [int(cv2.IMWRITE_PNG_COMPRESSION), 1])
     if not ok:
         raise RuntimeError("Failed to encode PNG")
     return buf.tobytes()
@@ -125,6 +126,12 @@ def encode_jpeg(img_bgr: np.ndarray, quality: int = 85) -> bytes:
     if not ok:
         raise RuntimeError("Failed to encode JPEG")
     return buf.tobytes()
+
+
+def overlay_media_type(data: bytes) -> str:
+    if data.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    return "image/png"
 
 
 def make_thumbnail(img_bgr: np.ndarray, max_side: int = 240) -> bytes:
@@ -287,7 +294,7 @@ def analyze_page(
 
 
 def refresh_overlay(page: PageState, alpha: Optional[float] = None) -> bytes:
-    """Rebuild overlay PNG from current label_map / blocks (fast edit path)."""
+    """Rebuild overlay from current label_map / blocks (fast edit path)."""
     if page.label_map is None:
         raise RuntimeError("Page has no label_map; analyze first")
     if alpha is not None:
@@ -302,7 +309,8 @@ def refresh_overlay(page: PageState, alpha: Optional[float] = None) -> bytes:
         fill_mode="dilated",
         draw_contours=True,
     )
-    page.overlay_png = encode_png(overlay)
+    # JPEG is much faster than PNG on large engineering drawings; preview quality is fine.
+    page.overlay_png = encode_jpeg(overlay, quality=88)
     return page.overlay_png
 
 
