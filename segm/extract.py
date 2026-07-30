@@ -72,6 +72,9 @@ class ExtractConfig:
     border_line_length_ratio: float = 0.65  # >= 65% of W/H (0.75 missed some frames)
     border_band_ratio: float = 0.03  # band width as fraction of shorter side
     border_band_px: int = 0  # >0 overrides border_band_ratio
+    # Extra top/bottom shelf (fraction of height) to catch title-block separators
+    # that sit above the outer frame but still span most of the page width.
+    border_span_shelf_ratio: float = 0.15
     border_line_grow_iters: int = 4  # attach adjacent non-text line-like strokes
     # Wipe remaining small zone ticks/letters wholly inside the border band.
     border_band_residual_max_area: int = 8000
@@ -271,6 +274,58 @@ def _border_band_mask(
     return mask, band
 
 
+def _span_shelf_mask(
+    shape_hw: Tuple[int, int],
+    shelf_ratio: float = 0.15,
+) -> np.ndarray:
+    """Top/bottom shelves for page-spanning title-block separators."""
+    h, w = shape_hw
+    shelf = int(round(h * max(0.0, float(shelf_ratio))))
+    shelf = min(max(0, shelf), max(1, h // 2))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if shelf > 0:
+        mask[:shelf, :] = 255
+        mask[h - shelf :, :] = 255
+    return mask
+
+
+def _collect_long_line_seed(
+    binary_roi: np.ndarray,
+    min_h_len: int,
+    min_v_len: int,
+    max_thickness: int,
+    axes: str = "hv",
+) -> np.ndarray:
+    """Morph-open long thin H/V strokes (ROI already AND-masked)."""
+    h, w = binary_roi.shape[:2]
+    seed = np.zeros((h, w), dtype=np.uint8)
+    if not np.any(binary_roi):
+        return seed
+
+    if "h" in axes:
+        h_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (max(40, min(min_h_len, max(40, w // 4))), 1)
+        )
+        h_lines = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN, h_kernel)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(h_lines, connectivity=8)
+        for label_id in range(1, n):
+            _x, _y, bw, bh, _area = stats[label_id]
+            if bw >= min_h_len and bh <= max_thickness:
+                seed[labels == label_id] = 255
+
+    if "v" in axes:
+        v_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (1, max(40, min(min_v_len, max(40, h // 4))))
+        )
+        v_lines = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN, v_kernel)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(v_lines, connectivity=8)
+        for label_id in range(1, n):
+            _x, _y, bw, bh, _area = stats[label_id]
+            if bh >= min_v_len and bw <= max_thickness:
+                seed[labels == label_id] = 255
+    return seed
+
+
 def _is_text_like_blob(bw: int, bh: int, area: int) -> bool:
     """Geometry heuristic: compact glyph-like blobs should not be erased."""
     if bw <= 0 or bh <= 0 or area <= 0:
@@ -328,48 +383,49 @@ def remove_border_frame_lines(
     border_band_px: int = 0,
     grow_iters: int = 4,
     protect_mask: Optional[np.ndarray] = None,
+    span_shelf_ratio: float = 0.15,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Remove only long frame lines on the four image borders.
+    """Remove long frame lines on borders and title-block separators.
 
-    Center-region long strokes (section outlines, leaders) are left untouched.
-    Dense table / title-block ink under ``protect_mask`` is never erased.
+    - Four-edge band: long H and V frame strokes.
+    - Extra top/bottom shelf: page-spanning H separators above the title block.
+    - Dense protect does **not** block these long thin span seeds (otherwise
+      machining frames erase nothing in step 04). Grown residuals still respect
+      ``protect_mask``.
     """
     h, w = binary.shape[:2]
     band_mask, band = _border_band_mask(
         (h, w), border_band_ratio=border_band_ratio, border_band_px=border_band_px
     )
-    border_fg = cv2.bitwise_and(binary, band_mask)
-
     min_h_len = max(1, int(round(w * max(0.0, float(length_ratio)))))
     min_v_len = max(1, int(round(h * max(0.0, float(length_ratio)))))
-    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(40, min(min_h_len, w // 4)), 1))
-    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(40, min(min_v_len, h // 4))))
-    h_lines = cv2.morphologyEx(border_fg, cv2.MORPH_OPEN, h_kernel)
-    v_lines = cv2.morphologyEx(border_fg, cv2.MORPH_OPEN, v_kernel)
+    max_thickness = max(band * 3, 12)
 
-    seed = np.zeros_like(binary)
-    for lines, axis in ((h_lines, "h"), (v_lines, "v")):
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
-        for label_id in range(1, n):
-            x, y, bw, bh, area = stats[label_id]
-            if axis == "h" and bw >= min_h_len and bh <= max(band * 3, 12):
-                seed[labels == label_id] = 255
-            elif axis == "v" and bh >= min_v_len and bw <= max(band * 3, 12):
-                seed[labels == label_id] = 255
+    border_fg = cv2.bitwise_and(binary, band_mask)
+    seed = _collect_long_line_seed(
+        border_fg, min_h_len, min_v_len, max_thickness, axes="hv"
+    )
 
-    if protect_mask is not None:
-        seed = cv2.bitwise_and(seed, cv2.bitwise_not(protect_mask))
+    shelf_mask = _span_shelf_mask((h, w), shelf_ratio=span_shelf_ratio)
+    shelf_fg = cv2.bitwise_and(binary, shelf_mask)
+    shelf_h = _collect_long_line_seed(
+        shelf_fg, min_h_len, min_v_len, max_thickness, axes="h"
+    )
+    seed = cv2.bitwise_or(seed, shelf_h)
+    core_seed = seed.copy()
 
     if not np.any(seed):
         return binary.copy(), seed
 
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(border_fg, connectivity=8)
+    search_mask = cv2.bitwise_or(band_mask, shelf_mask)
+    search_fg = cv2.bitwise_and(binary, search_mask)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(search_fg, connectivity=8)
     remove = seed.copy()
     touch_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     max_iters = max(0, int(grow_iters))
     for _ in range(max_iters):
         dilated = cv2.dilate(remove, touch_kernel, iterations=1)
-        touch = cv2.bitwise_and(border_fg, dilated)
+        touch = cv2.bitwise_and(search_fg, dilated)
         candidate_ids = set(int(v) for v in np.unique(labels[touch > 0]) if v > 0)
         added = False
         for label_id in candidate_ids:
@@ -392,7 +448,9 @@ def remove_border_frame_lines(
             break
 
     if protect_mask is not None:
-        remove = cv2.bitwise_and(remove, cv2.bitwise_not(protect_mask))
+        grown = cv2.bitwise_and(remove, cv2.bitwise_not(core_seed))
+        grown = cv2.bitwise_and(grown, cv2.bitwise_not(protect_mask))
+        remove = cv2.bitwise_or(core_seed, grown)
 
     cleaned = cv2.bitwise_and(binary, cv2.bitwise_not(remove))
     return cleaned, remove
@@ -1506,6 +1564,7 @@ def extract_info_blocks(
             border_band_px=cfg.border_band_px,
             grow_iters=cfg.border_line_grow_iters,
             protect_mask=protect,
+            span_shelf_ratio=cfg.border_span_shelf_ratio,
         )
         residual_clean, residual = remove_border_band_residuals(
             work,
