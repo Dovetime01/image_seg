@@ -1,0 +1,60 @@
+pdf=A014V469_PH_20210402.pdf
+page=1
+gap_thres=6
+text_gap_thres=14
+text_ocr_refine=True
+baseline_blocks=45
+refined_blocks=21
+effective_gap=47
+effective_text_gap=109
+merged_from=29
+merged_to=11
+clusters=[[4, 5, 7, 8, 9], [14, 16, 18, 20, 23, 26, 28, 29, 31, 33, 35, 37, 40, 42, 44], [17, 27, 30, 32, 34, 36, 39, 41, 43]]
+
+text_infos:
+  {'id': 0, 'is_text': False, 'font_height': 28.0, 'n_chars': 0, 'source': 'drawing'}
+  {'id': 1, 'is_text': True, 'font_height': 30.0, 'n_chars': 149, 'source': 'ocr'}
+  {'id': 2, 'is_text': False, 'font_height': 22.0, 'n_chars': 45, 'source': 'drawing'}
+  {'id': 3, 'is_text': False, 'font_height': 0.0, 'n_chars': 0, 'source': 'none'}
+  {'id': 4, 'is_text': True, 'font_height': 30.0, 'n_chars': 16, 'source': 'ocr'}
+  {'id': 5, 'is_text': True, 'font_height': 30.0, 'n_chars': 55, 'source': 'ocr'}
+  {'id': 6, 'is_text': True, 'font_height': 35.0, 'n_chars': 53, 'source': 'ocr'}
+  {'id': 7, 'is_text': True, 'font_height': 30.0, 'n_chars': 82, 'source': 'ocr'}
+  {'id': 8, 'is_text': True, 'font_height': 30.0, 'n_chars': 55, 'source': 'ocr'}
+  {'id': 9, 'is_text': True, 'font_height': 30.0, 'n_chars': 83, 'source': 'ocr'}
+  {'id': 10, 'is_text': False, 'font_height': 0.0, 'n_chars': 0, 'source': 'none'}
+  {'id': 11, 'is_text': True, 'font_height': 41.0, 'n_chars': 3, 'source': 'ocr_line'}
+  {'id': 12, 'is_text': True, 'font_height': 30.0, 'n_chars': 163, 'source': 'ocr'}
+  {'id': 13, 'is_text': False, 'font_height': 0.0, 'n_chars': 0, 'source': 'none'}
+  {'id': 14, 'is_text': True, 'font_height': 30.0, 'n_chars': 490, 'source': 'ocr'}
+  {'id': 15, 'is_text': False, 'font_height': 42.0, 'n_chars': 14, 'source': 'drawing'}
+  {'id': 16, 'is_text': True, 'font_height': 30.0, 'n_chars': 138, 'source': 'ocr'}
+  {'id': 17, 'is_text': True, 'font_height': 30.0, 'n_chars': 287, 'source': 'ocr'}
+  {'id': 18, 'is_text': True, 'font_height': 30.0, 'n_chars': 40, 'source': 'ocr'}
+  {'id': 19, 'is_text': True, 'font_height': 41.5, 'n_chars': 2, 'source': 'geometry'}
+  {'id': 20, 'is_text': True, 'font_height': 30.0, 'n_chars': 91, 'source': 'ocr'}
+  {'id': 21, 'is_text': True, 'font_height': 37.8, 'n_chars': 0, 'source': 'glyph_index'}
+  {'id': 22, 'is_text': False, 'font_height': 17.0, 'n_chars': 4, 'source': 'drawing'}
+  {'id': 23, 'is_text': True, 'font_height': 30.0, 'n_chars': 53, 'source': 'ocr'}
+  {'id': 24, 'is_text': False, 'font_height': 16.0, 'n_chars': 0, 'source': 'drawing'}
+  {'id': 25, 'is_text': False, 'font_height': 20.0, 'n_chars': 0, 'source': 'drawing'}
+  {'id': 26, 'is_text': True, 'font_height': 30.0, 'n_chars': 61, 'source': 'ocr'}
+  {'id': 27, 'is_text': True, 'font_height': 29.0, 'n_chars': 119, 'source': 'ocr'}
+  {'id': 28, 'is_text': True, 'font_height': 30.0, 'n_chars': 47, 'source': 'ocr'}
+  {'id': 29, 'is_text': True, 'font_height': 30.0, 'n_chars': 40, 'source': 'ocr'}
+  {'id': 30, 'is_text': True, 'font_height': 29.0, 'n_chars': 105, 'source': 'ocr'}
+  {'id': 31, 'is_text': True, 'font_height': 30.0, 'n_chars': 36, 'source': 'ocr'}
+  {'id': 32, 'is_text': True, 'font_height': 29.0, 'n_chars': 56, 'source': 'ocr'}
+  {'id': 33, 'is_text': True, 'font_height': 30.0, 'n_chars': 38, 'source': 'ocr'}
+  {'id': 34, 'is_text': True, 'font_height': 30.0, 'n_chars': 25, 'source': 'ocr'}
+  {'id': 35, 'is_text': True, 'font_height': 30.0, 'n_chars': 41, 'source': 'ocr'}
+  {'id': 36, 'is_text': True, 'font_height': 30.0, 'n_chars': 242, 'source': 'ocr'}
+  {'id': 37, 'is_text': True, 'font_height': 29.0, 'n_chars': 256, 'source': 'ocr'}
+  {'id': 38, 'is_text': False, 'font_height': 52.0, 'n_chars': 21, 'source': 'drawing'}
+  {'id': 39, 'is_text': True, 'font_height': 29.0, 'n_chars': 79, 'source': 'ocr'}
+  {'id': 40, 'is_text': True, 'font_height': 30.0, 'n_chars': 61, 'source': 'ocr'}
+  {'id': 41, 'is_text': True, 'font_height': 30.0, 'n_chars': 81, 'source': 'ocr'}
+  {'id': 42, 'is_text': True, 'font_height': 30.0, 'n_chars': 20, 'source': 'ocr'}
+  {'id': 43, 'is_text': True, 'font_height': 30.0, 'n_chars': 124, 'source': 'ocr'}
+  {'id': 44, 'is_text': True, 'font_height': 30.0, 'n_chars': 80, 'source': 'ocr'}
+  {'id': 45, 'is_text': True, 'font_height': 29.0, 'n_chars': 2, 'source': 'glyph_index'}
