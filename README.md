@@ -22,6 +22,89 @@
 
 ---
 
+## 总体流程（样例走读）
+
+仓库 [`sample/`](sample/) 提供示例加工图纸 [`A645AB62K1-Machining.pdf`](sample/A645AB62K1-Machining.pdf)，以及 Web 审图跑通后的过程图与导出结果（见 [`sample/output/`](sample/output/)）。下面按真实流水线顺序说明原理与用法。
+
+```text
+PDF/图片导入
+  → 渲染原图
+  → 二值化
+  → 清除最外层边框
+  → 去图框线
+  → 膨胀合并（gap）
+  → 连通域着色
+  → 叠色预览
+  →（可选）人工拆分 / 融合 / 删除
+  → 导出叠色图 / 各组件裁剪
+```
+
+### 0. 原图（PDF 渲染）
+
+导入 PDF 后先按页渲染成位图。后续所有步骤都在这张图上做像素级处理。
+
+![原图](sample/output/input.jpeg)
+
+### 1. 二值化
+
+把灰度图纸变成「墨迹 / 背景」二值图，作为膨胀与连通域的前景。
+
+![二值化](sample/output/binary.jpeg)
+
+### 2. 清除边框
+
+擦掉最外圈页边带，避免整页图框与内部视图粘成一个超大连通域。
+
+![清除边框](sample/output/border_cleared.jpeg)
+
+### 3. 去图框线
+
+在边框带及标题栏上下区域，去掉跨页宽的长水平 / 竖直图框线，尽量保留中间剖视、尺寸线等有效笔划。
+
+![去图框线](sample/output/nolines.jpeg)
+
+### 4. 膨胀合并
+
+用可调膨胀核（Web 侧栏「膨胀核 / 区域边距」）把间距小于阈值的笔划并在一起：核越大，越容易把近邻注记与视图收成同一信息块。
+
+![膨胀合并](sample/output/dilated.jpeg)
+
+### 5. 连通域着色
+
+对膨胀后的掩膜做连通域分析，每个候选信息块着不同颜色，便于检查是否粘连或过碎。
+
+![连通域着色](sample/output/cc_colors.jpeg)
+
+### 6. 叠色结果（自动分析预览）
+
+把各连通域半透明叠回原图，并描边。这是 Web Canvas 上「分析完成」后的默认视图；也可打开「文字二次膨胀」对碎字再合并后重跑。
+
+![叠色结果](sample/output/overlay.jpeg)
+
+### 7. Web 审图界面
+
+在浏览器中可调参数、翻页，并用 **拆分 / 融合 / 删除** 修正自动结果（拆分时笔画即边界：大块保色、小块新色）。
+
+![Web 审图界面](sample/output/web_effect.jpg)
+
+### 8. 导出组件裁剪
+
+审核满意后可导出各信息块 ZIP。例如某一视图裁剪件：
+
+![导出组件示例 part_008](sample/output/A645AB62K1-Machining_p1_parts/part_008.png)
+
+同目录下还有 `part_000` … `part_018` 等全部组件裁剪，见 [`sample/output/A645AB62K1-Machining_p1_parts/`](sample/output/A645AB62K1-Machining_p1_parts/)。
+
+### 9. 导出整页叠色效果图
+
+最终整页叠色 PNG，便于存档或给下游对照：
+
+![导出叠色效果图](sample/output/A645AB62K1-Machining_p1_overlay.png)
+
+**怎么自己复现：** 启动 Web（见下方「快速开始」）→ 导入 `sample/A645AB62K1-Machining.pdf` → 点重新分析 → 在过程图里对照上述步骤 → 需要时手动审核 → 导出效果图 / 组件 ZIP。
+
+---
+
 ## 功能一览
 
 ### 自动分割
@@ -63,7 +146,7 @@ cd frontend && npm install && npm run dev
 
 浏览器打开：<http://127.0.0.1:5173>
 
-样例 PDF 可放在 `sample/` 下直接导入试用。
+示例图纸与过程输出在 [`sample/`](sample/)（含 Machining PDF 与 [`sample/output/`](sample/output/) 配图）。
 
 ---
 
@@ -74,7 +157,7 @@ image_seg/
   segm/          # 分割算法（extract / visualize / text_refine / export）
   backend/       # FastAPI（分析、审核编辑、导出）
   frontend/      # Vite + Vue3 + Canvas 审核界面
-  sample/        # 本地试用样例（可选）
+  sample/        # 示例 PDF + output 过程图 / 导出结果
   requirements.txt
 ```
 
@@ -88,16 +171,6 @@ image_seg/
 | 文字二次膨胀 | 碎字再合并；勾选后需重新分析当页 |
 | `text_gap_thres` | 文字专用更大膨胀核 |
 | `alpha` | 叠色透明度 |
-
----
-
-## 算法流程（简图）
-
-```text
-图纸 → 二值化 →（可选去线 / 清边框）→ 膨胀(gap)
-     → 连通域 →（可选文字二次膨胀）→ 信息块列表
-     → 叠色预览 / 人工拆分·融合 / 导出
-```
 
 ---
 
